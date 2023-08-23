@@ -26,12 +26,15 @@ router.post("/:cid/product/:pid",async(req,res)=>{
       const productoEnCarrito = carrito.products.find(producto => producto.product.id === pid);
       
       if (productoEnCarrito) {
-          productoEnCarrito.quantity++;
+          let producto = await ProductsModel.findById(pid)
+          producto.quantity++
+          let result = await ProductsModel.findByIdAndUpdate(pid,producto)
       } else {
           const producto = await ProductsModel.findById(pid);
+          producto.quantity = 1
+          let result = await ProductsModel.findByIdAndUpdate(pid,producto)
           carrito.products.push({
               product: producto._id,
-              quantity: 1
           });
       }
       
@@ -51,7 +54,7 @@ router.delete("/:cid/products/:pid",async(req,res)=>{
     if(producto !== -1){
       productos.splice(producto,1)
       let result = await CartsModel.findByIdAndUpdate(cid,carrito)
-      return res.json({message: "Producto eleminado correctamente del carrito", data: result})
+      return res.json({message: "Producto eliminado correctamente del carrito", data: result})
     }else{
       return res.status(404).json({message: "Producto no encontrado"})
     }
