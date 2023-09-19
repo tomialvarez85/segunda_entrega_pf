@@ -1,55 +1,106 @@
-import { Router } from "express";
-import ProductsModel from "../dao/models/products.js";
-import CartsModel from "../dao/models/carts.js";
+import passport from "passport";
+import local from "passport-local"
+import { UserModel } from "../dao/mongo/models/users.model.js";
+import { createHash } from "../utils.js";
+import GithubStrategy from "passport-github2"
+import * as dotenv from "dotenv"
+import crypto from "crypto"
+import CartsModel from "../dao/mongo/models/carts.js"
+import jwt, {ExtractJwt} from "passport-jwt"
 
-const router = Router()
+dotenv.config()
 
-router.get("/",async (req,res)=>{
-    const {limit = 10, page = 1, sort, query} = req.query
-    const {docs,hasPrevPage,hasNextPage,nextPage,prevPage} = await ProductsModel.paginate(query ? {category: query} : {},{limit, page, lean: true, sort: sort ? {price:1} : {price:-1}})
-    res.render("home",{title: "Productos", 
-    productos: docs,  
-    hasPrevPage,
-    hasNextPage,
-    prevPage,
-    nextPage,
-    limit,
-    sort,
-    query,
-    script: "home.js", 
-    style: "home.css",
-    nombre: req.user.user.first_name,
-    apellido: req.user.user.last_name,
-    email: req.user.user.email,
-    rol: req.user.user.role
-})
-})
+const LocalStrategy = local.Strategy
+const JwtStrategy = jwt.Strategy
+const GithubClientId = process.env.GITHUB_CLIENT_ID
+const GithubClientSecret = process.env.GITHUB_CLIENT_SECRET
+const GithubURL = process.env.GITHUB_URL_CALLBACK
 
-router.get("/realTimeProducts",(req,res)=>{
-    res.render("realTimeProducts",{title: "Productos en tiempo real", script: "index.js"})
-})
-
-router.get("/carts/:cid",async(req,res)=>{
-    const { cid } = req.params;
-    try {
-        let carrito = await CartsModel.findOne({_id: cid }).lean()
-        if (carrito) {
-            let productos = carrito.products;
-            if(productos.length === 0){
-                res.send("El carrito está vacio")
-            }else{
-                res.render("carrito", { title: "Carrito", productos, script: "carrito.js", style: "carrito.css"});
+const intializePassport = async()=>{
+    passport.use("register",new LocalStrategy({
+        passReqToCallback: true,
+        usernameField: "email"},async(req,mail,pass,done)=>{
+            const {first_name,last_name,email,age,password} = req.body
+            try{
+                const userAccount = await UserModel.findOne({email: email})
+                if(userAccount){
+                    return done(null,false,{message: "Tu usuario ya existe"})
+                }else{
+                    const carrito = {
+                        products : []
+                    }
+                    let cart = await CartsModel.create(carrito)
+                    const newUser = { 
+                        first_name,
+                        last_name,
+                        email,
+                        age,
+                        cart: cart.id,
+                        role: "user",
+                        password: createHash(password)
+                    }
+                    const result = await UserModel.create(newUser)
+                    console.log(result)
+                    return done(null,result)
+                }
+            }catch(err){
+                return done(err)
             }
-        } else {
-            res.send("Carrito no encontrado");
+        }))
+
+    passport.use("jwt", new JwtStrategy({
+        jwtFromRequest: ExtractJwt.fromExtractors([cookieExtractor]),
+        secretOrKey: "CoderKeySecreta"
+    },async(jwt_payload,done)=>{
+        try{
+            return done(null,jwt_payload)
+        }catch(err){
+            return done(err)
         }
-    } catch (err) { 
-        console.log(err); 
-        res.send("Error al cargar el carrito");
+    }))
+
+    passport.use("github",new GithubStrategy({
+        clientID : GithubClientId,
+        clientSecret: GithubClientSecret,
+        callbackURL: GithubURL
+    },async(accessToken,refreshToken,profile,done)=>{
+          try{
+            console.log(profile)
+           const user = await UserModel.findOne({email: profile?.emails[0]?.value})
+           if(!user){ 
+            const newUser = {
+                name: profile.displayName,
+                last_name: profile.displayName,
+                email: profile?.emails[0]?.value,
+                user: profile.username,
+                password: crypto.randomUUID()
+            }
+            const result = await UserModel.create(newUser)
+            done(null,result)
+           }else{
+            done(null,user)
+           }
+          }catch(err){
+            done(err,null)
+          }
+    }))
+ 
+    passport.serializeUser((user, done) => {
+        done(null, user.id)
+    })
+    
+    passport.deserializeUser(async (id, done) => {
+        let user = await UserModel.findById(id)
+        done(null, user) 
+    })
+}
+
+const cookieExtractor = (req)=>{
+    let token = null
+    if(req && req.cookies){
+        token = req.cookies["coderCookieToken"]
     }
-})
+    return token
+}
 
-
-
-
-export default router 
+export default intializePassport
